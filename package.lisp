@@ -6,19 +6,22 @@
 (defpackage #:corona
   (:use #:cl)
   (:import-from #:alexandria
-   #:flatten
+                #:flatten
                 #:hash-table-alist
-   #:hash-table-keys
+                #:hash-table-keys
                 #:hash-table-values
-   #:lastcar)
+                #:lastcar
+                #:curry
+                #:ensure-list)
   (:import-from #:cl-csv
-   #:read-csv)
+                #:read-csv
+                #:row)
   (:import-from #:cl-ppcre
-   #:scan)
+                #:scan)
   (:import-from #:inferior-shell
-   #:run/s)
+                #:run/s)
   (:import-from #:vgplot
-   #:plot)
+                #:plot)
   (:export #:main))
 
 

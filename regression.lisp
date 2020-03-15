@@ -1,19 +1,10 @@
-(unlock-package :sb-ext)
-(ql:quickload '(:inferior-shell :cl-csv :vgplot :cl-ppcre :inferior-shell))
-
-(defpackage :corona
-  (:use :cl :inferior-shell :cl-csv :alexandria
-        :cl-ppcre :vgplot))
-
 (in-package :corona)
 
-(load "polynomial-regression.lisp")
 ;; --------------------------------------------------------------------------------
 ;; Coronavirus interpretation
 ;; --------------------------------------------------------------------------------
-(defparameter corona (make-hash-table :test 'equal))
 
-(defun confirmed-case (row)
+(defun confirmed-case (corona row)
   (setf (gethash (concatenate 'string (car row) " " (cadr row)) corona)
         (let ((hs (make-hash-table)))
           (loop for x in #1=(nthcdr 4 row)
@@ -23,7 +14,7 @@
                              (coerce (parse-integer x) 'double-float))))
           hs)))
 
-(defun inactive-case (row)
+(defun inactive-case (corona row)
   (let ((hs (gethash (concatenate 'string (car row) " " (cadr row)) corona)))
     (loop for x in #1=(nthcdr 4 row)
           and i from 1 to (length #1#)
@@ -32,36 +23,30 @@
                        (- (gethash i hs)
                            (coerce (parse-integer x) 'double-float)))))))
 
-;; We factor out china for two reasons:
-;; Ground zero occured in centeral china. They progressed to the later stages
-;; of an epidemic far before the rest of the world started to see a majority of cases.
-;; China also has had one of the most effiecient lock-down we've seen, so the spread
-;; has mostly been contained.
-(defparameter non-chinese-cases (make-hash-table))
-
-(defun daily-cases ()
+(defun daily-cases (cases case-list)
   "daily aggregate"
   (map nil #'(lambda (x)
-             (loop for z in (hash-table-alist (cdr x))
-                   do (setf (gethash (car z) non-chinese-cases)
-                            ;; so either there is no value currently, in which case we use 0
-                            (+ (or (gethash (car z) non-chinese-cases) 0)
-                                ;; or
-                                (or (cdr z) 0))))) ;; or use the previous day...
+               (loop for z in (hash-table-alist (cdr x))
+                     do (setf (gethash (car z) cases)
+                              ;; so either there is no value currently, in which case we use 0
+                              (+ (or (gethash (car z) cases) 0)
+                                 ;; or
+                                 (or (cdr z) 0))))) ;; or use the previous day...
 
-       ;; (mapcar #'(lambda (x)
-       ;;            (hash-table-alist (cdr x))
-       ;;            )
-       ;; We filter out china
-       (remove-if #'(lambda (x) (cl-ppcre:scan "China" (car x)))
-                  (hash-table-alist corona))))
+       case-list)
+  cases)
 
 (defun rate (data)
   "rate of change"
-  (if (consp (cddr data))
-      (cons (- (/ (cadr data) (car data)) 1)
-            (rate (cdr data)))
-      (cons (- (/ (cadr data) (car data)) 1) nil)))
+  (flet ((slope (a b)
+           (if (zerop b)
+               1
+               (- (/ a b) 1))))
+    (if (consp (cddr data))
+        (cons (slope (cadr data) (car data))
+              (rate (cdr data)))
+        (cons (slope (cadr data) (car data))
+              nil))))
 
 (defun array-to-list (l)
   (loop for x below (car (array-dimensions l))
@@ -74,7 +59,7 @@
               :initial-contents (list (mapcar #'(lambda (x)
                                                (coerce x 'double-float))
                                            lst))))
- 
+
 (defun polynomial-regression (data coeff)
   "Regression based on coeff."
   (let ((x-values (list-to-array (loop for x from 1 to (length data)
@@ -94,65 +79,87 @@ value of K, the carrying capacity. For now we're using an expotential growth fun
 but with a rate based on our linear regression."
   (* current (expt 2.7182818284590452353602874713527d0 rate)))
 
+(defun extrapolate-cases (cases days)
+  "Extrapolate CASES for DAYS"
+  (let* ((extrapolated-cases (make-hash-table))
+         (slope-regression (polynomial-create
+                            (polynomial-regression
+                             (rate (hash-table-values cases)) 1)))
+         (recent-day (apply #'max (hash-table-keys cases)))
+         (var (gethash recent-day cases))
+         (rate (lastcar (rate (hash-table-values cases)))))
+    (dotimes (x days)
+      (let ((d (extrapolate var rate)))
+        (setf (gethash (+ x recent-day) extrapolated-cases) d)
+        (setf var d
+              rate (funcall slope-regression (+ x recent-day)))))
+    extrapolated-cases))
 
-  ;; Setup data
+;; Setup data
 (defun directory-search (x lst)
   (find-if #'(lambda (y)
                (scan x y))
            (mapcar #'namestring lst)))
 
-(defun main ()
-  (if (directory "data")
-      (run/s "cd data; git pull")
-      (run/s "git clone https://github.com/CSSEGISandData/COVID-19 data"))
+(defun main (&key (days 90) countries)
+  (let ((cases (directory "data/csse_covid_19_data/csse_covid_19_time_series/*.csv"))
+        (countries (ensure-list countries))
+        (corona (make-hash-table :test 'equal)))
 
-
-  ;; We want current active cases. To get that we have to subtract the number of recovered + deaths from the number of conformed cases.
-  (let ((cases (directory "data/csse_covid_19_data/csse_covid_19_time_series/*.csv")))
+ ;; We want current active cases.
+    ;; To get that we have to subtract the number of recovered + deaths
+    ;; from the number of conformed cases.
     (with-open-file (s (directory-search "Confirmed" cases))
-      (map nil #'confirmed-case (cdr (read-csv s))))
+      (map nil (curry #'confirmed-case corona) (cdr (read-csv s))))
 
     (with-open-file (s (directory-search "Deaths" cases))
-    (map nil #'inactive-case (cdr (read-csv s))))
+      (map nil (curry #'inactive-case corona) (cdr (read-csv s))))
 
     (with-open-file (s (directory-search "Recovered" cases))
-    (map nil #'inactive-case (cdr (read-csv s)))))
+      (map nil (curry #'inactive-case corona) (cdr (read-csv s))))
 
-  ;; linear regression of slope of daily active cases
-  (daily-cases)
+    ;; We factor out china for two reasons:
+    ;; Ground zero occured in centeral china. They progressed to the later stages
+    ;; of an epidemic far before the rest of the world started to see a majority of cases.
+    ;; China also has had one of the most effiecient lock-down we've seen, so the spread
+    ;; has mostly been contained.
 
-  (let ((slope-regression
-        (polynomial-create
-         (polynomial-regression
-          (rate (hash-table-values non-chinese-cases)) 1)))
-      ;; we'll extrapolate out the rate of change using it's linear regression
-      (extrapolated-hs (make-hash-table)))
+    ;; linear regression of slope of daily active cases
+    (let* ((world-cases (daily-cases (make-hash-table :test 'equal)
+                                     (remove-if #'(lambda (x) (cl-ppcre:scan "China" (car x)))
+                                                (hash-table-alist corona))))
+           (ext-world-cases (extrapolate-cases world-cases days)))
+      (apply #'plot
+             ;; current cases
+             (hash-table-keys world-cases)
+             (append (hash-table-values world-cases))
+             "World"
+             ;; extrapolation
+             (reverse (hash-table-keys ext-world-cases))
+             (reverse (hash-table-values ext-world-cases))
+             (format nil "World ~a days" days)
+             (mapcan (lambda (country)
+                       (when country
+                         (let ((country-cases (remove-if-not #'(lambda (x) (cl-ppcre:scan country (car x)))
+                                                             (hash-table-alist corona))))
+                           (when country-cases
+                             (let* ((daily-cases (daily-cases (make-hash-table :test 'equal)
+                                                              country-cases))
+                                    (ext-cases (extrapolate-cases daily-cases days)))
+                               (list (hash-table-keys daily-cases)
+                                 (hash-table-values daily-cases)
+                                 country
+                                 (reverse (hash-table-keys ext-cases))
+                                 (reverse (hash-table-values ext-cases))
+                                 (format nil "~A ~d days" country days) ))))))
+                     countries)))))
 
-;;  Most recent slope
-    (let* ((recent-day (apply #'max (hash-table-keys non-chinese-cases)))
-           (var (gethash recent-day non-chinese-cases))
-           (rate (lastcar (rate(hash-table-values non-chinese-cases)))))
-      ;; We'll extrapolate out 3 months
-      (dotimes (x 90)
-        (let ((d (extrapolate var rate)))
-          (setf (gethash (+ x recent-day) extrapolated-hs) d)
-          (setf var d
-                rate (funcall slope-regression (+ x recent-day))))))
-
-    (plot
-        ;; current cases
-     (hash-table-keys non-chinese-cases)
-     (hash-table-values non-chinese-cases)
-
-      ;; extrapolation
-      (reverse (hash-table-keys extrapolated-hs))
-      (reverse (hash-table-values extrapolated-hs)))))
 
   ;; (sb-ext:save-lisp-and-die #P"corona" :toplevel #'corona::main :executable t :compression t)
 
   ;; rates of change
-  ;; (hash-table-keys non-chinese-cases)
-  ;; (rate (hash-table-values non-chinese-cases))
+  ;; (hash-table-keys world-cases)
+  ;; (rate (hash-table-values world-cases))
 
 ;; linear regression of that rate
 ;; (loop for x from 1 to 60 collect x)
@@ -173,5 +180,4 @@ but with a rate based on our linear regression."
 ;;   ;; has the steepest increase, then we can start to see when it will hit 0
 ;;   ;; (/ capacity (+ 1 (* b (expt 2.718 (* (- rate) time)))))
 ;;   ;; )
-;; (gradi (rate (hash-table-values non-chinese-cases)))
-
+;; (gradi (rate (hash-table-values world-cases)))
