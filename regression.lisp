@@ -147,11 +147,11 @@ but with a rate based on our linear regression."
                                                               country-cases))
                                     (ext-cases (extrapolate-cases daily-cases days)))
                                (list (hash-table-keys daily-cases)
-                                 (hash-table-values daily-cases)
-                                 country
-                                 (reverse (hash-table-keys ext-cases))
-                                 (reverse (hash-table-values ext-cases))
-                                 (format nil "~A ~d days" country days) ))))))
+                                     (hash-table-values daily-cases)
+                                     country
+                                     (reverse (hash-table-keys ext-cases))
+                                     (reverse (hash-table-values ext-cases))
+                                     (format nil "~A ~d days" country days)))))))
                      countries)))))
 
 

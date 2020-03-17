@@ -101,7 +101,7 @@ returns
   (let ((l (list (list (sqrt (caar m))))) x (j 0) i)
     (dolist (cm (cdr m) (mapcar #'(lambda (x) (nconc x (make-list (- (length m) (length x)) :initial-element 0))) l))
       (setq x (list (/ (car cm) (caar l))) i 0)
-      (dolist (cl (cdr l)) 
+      (dolist (cl (cdr l))
         (setf (cdr (last x)) (list (/ (- (elt cm (incf i)) (*v x cl)) (car (last cl))))))
       (setf (cdr (last l)) (list (nconc x (list (sqrt (- (elt cm (incf j)) (*v x x))))))))))
 
@@ -133,12 +133,12 @@ returns
 ;; Matrix Multiplication
 ;; --------------------------------------------------------------------------------
 
-(defun matrix-multiply (a b)
-  (flet ((col (mat i) (mapcar #'(lambda (row) (elt row i)) mat))
-         (row (mat i) (elt mat i)))
-    (loop for row from 0 below (length a)
-          collect (loop for col from 0 below (length (row b 0))
-                        collect (apply #'+ (mapcar #'* (row a row) (col b col)))))))
+;; (defun matrix-multiply (a b)
+;;   (flet ((col (mat i) (mapcar #'(lambda (row) (elt row i)) mat))
+;;          (row (mat i) (elt mat i)))
+;;     (loop for row from 0 below (length a)
+;;           collect (loop for col from 0 below (length (row b 0))
+;;                         collect (apply #'+ (mapcar #'* (row a row) (col b col)))))))
 
 ;; example use:
 ;; (matrix-multiply '((1 2) (3 4)) '((-3 -8 3) (-2 1 4)))
